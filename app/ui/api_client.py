@@ -10,7 +10,7 @@ import logging
 from typing import Dict, Any, Optional, List
 import requests
 from app.config import settings
-from app.database import readonly_engine, check_database_health
+import app.database as app_db
 from app.services.analytics_service import get_database_schema, execute_predefined_query
 from app.agent.workflow import run_agentic_workflow
 
@@ -22,8 +22,10 @@ class DashboardAPIClient:
     Client for interacting with the Agentic AI Data Analyst FastAPI service.
     """
 
-    def __init__(self, base_url: str = "http://127.0.0.1:8000", timeout: int = 15):
-        self.base_url = base_url.rstrip("/")
+    def __init__(self, base_url: Optional[str] = None, timeout: int = 15):
+        import os
+        resolved_url = base_url or os.getenv("BACKEND_URL") or getattr(settings, "BACKEND_URL", "http://127.0.0.1:8000")
+        self.base_url = resolved_url.rstrip("/")
         self.timeout = timeout
         self.headers = {"Content-Type": "application/json"}
         if settings.API_KEY:
@@ -41,7 +43,7 @@ class DashboardAPIClient:
             pass
 
         # Fallback to direct Python database probe
-        health = check_database_health()
+        health = app_db.check_database_health()
         health["source"] = "direct"
         return health
 
@@ -55,7 +57,7 @@ class DashboardAPIClient:
             pass
 
         # Fallback to direct database schema inspector
-        with readonly_engine.connect() as conn:
+        with app_db.readonly_engine.connect() as conn:
             return get_database_schema(conn).model_dump()
 
     def query_predefined(self, query_id: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -76,7 +78,7 @@ class DashboardAPIClient:
             pass
 
         # Fallback to direct execution
-        with readonly_engine.connect() as conn:
+        with app_db.readonly_engine.connect() as conn:
             try:
                 res = execute_predefined_query(conn, query_id, params or {})
                 return res.model_dump()
@@ -103,7 +105,7 @@ class DashboardAPIClient:
             pass
 
         # Fallback to direct Python workflow execution
-        final_state = run_agentic_workflow(question=question)
+        final_state = run_agentic_workflow(question=question, engine=app_db.readonly_engine)
         rows = final_state.get("query_execution_result") or []
         cols = final_state.get("columns") or (list(rows[0].keys()) if rows else [])
 

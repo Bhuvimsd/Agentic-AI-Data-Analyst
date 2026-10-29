@@ -1,0 +1,39 @@
+# Git
+.git
+.gitignore
+
+# Python virtual environment & cache
+.venv/
+venv/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Pytest & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+
+# SQLite test files & local DBs
+*.db
+test_*.db
+
+# Environment & local credentials
+.env
+!.env.example
+
+# IDE & Editor folders
+.vscode/
+.idea/
+.gemini/
+*.swp
+*~
+
+# Artifacts & temp files
+artifacts/
+data/*.json
+data/*.csv

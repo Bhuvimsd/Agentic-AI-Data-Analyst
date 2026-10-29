@@ -93,6 +93,9 @@ class Settings(BaseSettings):
     RATE_LIMIT_ENABLED: bool = Field(default=False, description="Enable client IP rate limiting")
     RATE_LIMIT_PER_MINUTE: int = Field(default=60, description="Max requests permitted per minute per IP")
 
+    # Service & Dashboard URLs
+    BACKEND_URL: str = Field(default="http://localhost:8000", description="Backend FastAPI service URL")
+
     # Connection Pooling Parameters
     DB_POOL_SIZE: int = Field(default=10, description="SQLAlchemy connection pool size")
     DB_MAX_OVERFLOW: int = Field(default=20, description="SQLAlchemy connection pool max overflow")

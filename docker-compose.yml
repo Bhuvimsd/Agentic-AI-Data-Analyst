@@ -1,0 +1,119 @@
+# ==============================================================================
+# Agentic AI Data Analyst - Multi-Container Production Architecture
+# PostgreSQL 16 (Least-Privilege RBAC) + FastAPI Gateway + Streamlit Dashboard
+# ==============================================================================
+
+services:
+  # ----------------------------------------------------------------------------
+  # 1. PostgreSQL Database Service
+  # ----------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: agentic_ai_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: agentic_ai_analytics
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Automated database initialization in deterministic execution order
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./sql/seed.sql:/docker-entrypoint-initdb.d/02_seed.sql:ro
+      - ./sql/02_create_roles.sql:/docker-entrypoint-initdb.d/03_roles.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d agentic_ai_analytics"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - analytics-net
+
+  # ----------------------------------------------------------------------------
+  # 2. FastAPI Backend Service (Gateway & LangGraph Agent Engine)
+  # ----------------------------------------------------------------------------
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: agentic_ai_backend
+    restart: unless-stopped
+    environment:
+      APP_ENV: production
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: agentic_ai_analytics
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/agentic_ai_analytics
+      DATABASE_URL_READONLY: postgresql+psycopg://analyst_readonly:analyst_password123@postgres:5432/agentic_ai_analytics
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      LLM_API_KEY: ${LLM_API_KEY:-mock-api-key}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+      QUERY_TIMEOUT_SECONDS: 10
+      DEFAULT_ROW_LIMIT: 100
+      MAX_ROW_LIMIT: 1000
+      API_AUTH_ENABLED: ${API_AUTH_ENABLED:-false}
+      API_KEY: ${API_KEY:-}
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-false}
+      RATE_LIMIT_PER_MINUTE: 60
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - analytics-net
+
+  # ----------------------------------------------------------------------------
+  # 3. Streamlit Dashboard Service (Interactive Visual Frontend)
+  # ----------------------------------------------------------------------------
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: agentic_ai_frontend
+    restart: unless-stopped
+    environment:
+      BACKEND_URL: http://backend:8000
+      DB_HOST: postgres
+      DATABASE_URL_READONLY: postgresql+psycopg://analyst_readonly:analyst_password123@postgres:5432/agentic_ai_analytics
+      STREAMLIT_SERVER_PORT: 8501
+      STREAMLIT_SERVER_ADDRESS: 0.0.0.0
+    ports:
+      - "8501:8501"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - analytics-net
+
+# ------------------------------------------------------------------------------
+# Isolated Bridge Network
+# ------------------------------------------------------------------------------
+networks:
+  analytics-net:
+    driver: bridge
+
+# ------------------------------------------------------------------------------
+# Persistent PostgreSQL Data Volume
+# ------------------------------------------------------------------------------
+volumes:
+  pgdata:
+    driver: local

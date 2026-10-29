@@ -20,7 +20,7 @@ import statistics
 import logging
 from pathlib import Path
 from typing import Dict, Any, List, Optional
-from sqlalchemy import create_engine, Engine
+from sqlalchemy import create_engine, Engine, text
 from app.config import settings, BASE_DIR
 from app.llm.client import get_llm_client, LLMClient, MockLLMClient
 from app.agent.workflow import run_agentic_workflow
@@ -44,11 +44,32 @@ def run_benchmark(
 
     # Determine database engine
     if engine is None:
-        test_db_path = BASE_DIR / "test_api_analytics.db"
-        if test_db_path.exists():
-            db_engine = create_engine(f"sqlite:///{test_db_path}")
-        else:
-            db_engine = create_engine(settings.DATABASE_URL_READONLY)
+        db_engine = None
+        for db_name in ["test_pytest_analytics.db", "test_api_analytics.db"]:
+            candidate_path = BASE_DIR / db_name
+            if candidate_path.exists():
+                cand_engine = create_engine(f"sqlite:///{candidate_path}")
+                try:
+                    with cand_engine.connect() as test_conn:
+                        test_conn.execute(text("SELECT 1 FROM orders LIMIT 1"))
+                        db_engine = cand_engine
+                        break
+                except Exception:
+                    continue
+
+        if db_engine is None:
+            try:
+                pg_engine = create_engine(settings.DATABASE_URL_READONLY)
+                with pg_engine.connect() as test_conn:
+                    test_conn.execute(text("SELECT 1"))
+                    db_engine = pg_engine
+            except Exception:
+                fallback_path = BASE_DIR / "test_api_analytics.db"
+                db_engine = create_engine(f"sqlite:///{fallback_path}")
+                from scripts.load_data import init_schema, seed_data
+                from scripts.generate_data import generate_synthetic_dataset
+                init_schema(db_engine)
+                seed_data(db_engine, generate_synthetic_dataset(num_customers=500, num_orders=2200, seed=42))
     else:
         db_engine = engine
 
@@ -86,9 +107,9 @@ def run_benchmark(
     total_prompt_tokens = 0
     total_completion_tokens = 0
 
-    print("\n" + "=" * 80)
-    print(f"STARTING AI EVALUATION BENCHMARK: {total_questions} TEST CASES")
-    print("=" * 80)
+    print("\n" + "=" * 80, flush=True)
+    print(f"STARTING AI EVALUATION BENCHMARK: {total_questions} TEST CASES", flush=True)
+    print("=" * 80, flush=True)
 
     for idx, item in enumerate(items, 1):
         start_time = time.perf_counter()
@@ -163,7 +184,7 @@ def run_benchmark(
         })
 
         tag = "[PASS]" if results[-1]["passed"] else "[FAIL]"
-        print(f"[{idx:02d}/{total_questions}] {tag} {item.id} ({item.category.value[:6]}): {item.question[:45].ljust(45)} -> {status} ({duration_ms}ms)")
+        print(f"[{idx:02d}/{total_questions}] {tag} {item.id} ({item.category.value[:6]}): {item.question[:45].ljust(45)} -> {status} ({duration_ms}ms)", flush=True)
 
     # --------------------------------------------------------------------------
     # Aggregate Metrics Calculation

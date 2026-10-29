@@ -11,7 +11,7 @@ from datetime import datetime, date
 from typing import Any
 from sqlalchemy import text
 from app.agent.state import AgentState
-from app.database import readonly_engine, set_statement_timeout
+import app.database as app_db
 from app.config import settings
 
 
@@ -41,13 +41,19 @@ def execute_query(state: AgentState, engine=None) -> AgentState:
     sql_to_run = state.get("generated_sql") or ""
     retry_count = state.get("retry_count", 0)
     max_retries = state.get("max_retries", 2)
-    target_engine = engine or readonly_engine
+    target_engine = engine or app_db.readonly_engine
 
     start_time = time.perf_counter()
     try:
         with target_engine.connect() as conn:
             # Enforce query statement timeout
-            set_statement_timeout(conn, settings.QUERY_TIMEOUT_SECONDS)
+            app_db.set_statement_timeout(conn, settings.QUERY_TIMEOUT_SECONDS)
+            if "sqlite" in str(target_engine.url).lower():
+                try:
+                    raw_db = getattr(conn.connection, "dbapi_connection", conn.connection)
+                    raw_db.create_function("to_char", 2, lambda d, fmt: str(d)[:7] if d else None)
+                except Exception:
+                    pass
             cursor_res = conn.execute(text(sql_to_run))
             columns = list(cursor_res.keys())
             raw_rows = cursor_res.fetchall()

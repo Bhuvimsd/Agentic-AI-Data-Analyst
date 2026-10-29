@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import Connection
 from app.config import settings
+import app.database as app_db
 from app.database import get_readonly_connection, check_database_health
 from app.api.schemas import (
     HealthResponse, SchemaResponse, AnalyticsQueryRequest, 
@@ -145,7 +146,8 @@ def run_agent_query(
     """
     try:
         final_state = run_agentic_workflow(
-            question=request.question
+            question=request.question,
+            engine=app_db.readonly_engine
         )
         now_iso = datetime.now(timezone.utc).isoformat()
         

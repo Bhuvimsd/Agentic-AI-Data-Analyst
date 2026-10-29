@@ -9,7 +9,7 @@ import time
 import logging
 from decimal import Decimal
 from datetime import datetime, date
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 from sqlalchemy import text, inspect, Connection
 from app.config import settings
 from app.api.schemas import (
@@ -245,18 +245,27 @@ def serialize_cell_value(val: Any) -> Any:
 
 def execute_predefined_query(
     conn: Connection,
-    query_id: PredefinedQueryID,
-    params: Optional[QueryParameters] = None
+    query_id: Union[PredefinedQueryID, str],
+    params: Optional[Union[QueryParameters, Dict[str, Any]]] = None
 ) -> AnalyticsQueryResponse:
     """
     Executes an approved analytical query with validated parameters,
     measuring execution latency and returning structured results.
     """
+    if isinstance(query_id, str):
+        try:
+            query_id = PredefinedQueryID(query_id)
+        except ValueError:
+            raise ValueError(f"Query ID '{query_id}' is not in the approved analytical registry.")
+
     if query_id not in APPROVED_QUERIES:
         raise ValueError(f"Query ID '{query_id}' is not in the approved analytical registry.")
         
     query_info = APPROVED_QUERIES[query_id]
-    user_params = params or QueryParameters()
+    if isinstance(params, dict):
+        user_params = QueryParameters(**params)
+    else:
+        user_params = params or QueryParameters()
 
     # Determine and bound limit parameter
     applied_limit = user_params.limit or query_info["default_limit"]
@@ -283,14 +292,15 @@ def execute_predefined_query(
             for row in raw_rows
         ]
         execution_time_ms = round((time.perf_counter() - start_time) * 1000, 2)
+        query_id_val = query_id.value if hasattr(query_id, "value") else str(query_id)
 
         return AnalyticsQueryResponse(
             success=True,
-            query_id=query_id.value,
+            query_id=query_id_val,
             title=query_info["title"],
             description=query_info["description"],
             metadata=QueryExecutionMetadata(
-                query_id=query_id.value,
+                query_id=query_id_val,
                 execution_time_ms=execution_time_ms,
                 row_count=len(serialized_data),
                 applied_limit=applied_limit,
