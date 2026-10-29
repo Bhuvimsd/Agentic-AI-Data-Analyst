@@ -11,6 +11,10 @@ uvicorn[standard]>=0.28.0
 httpx>=0.27.0
 openai>=1.14.0
 
+# Agentic Workflow & SQL AST Validation
+langgraph>=0.2.0
+sqlglot>=23.0.0
+
 # Synthetic Data Generation & Data Processing
 faker>=24.0.0
 pandas>=2.2.0
