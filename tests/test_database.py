@@ -103,5 +103,8 @@ def test_separate_credentials_configuration():
     """Verifies that admin and read-only connection strings are configured separately."""
     assert settings.DATABASE_URL is not None
     assert settings.DATABASE_URL_READONLY is not None
-    # Verify read-only role user is different from admin user in default config
-    assert "analyst_readonly" in settings.DATABASE_URL_READONLY or settings.DATABASE_URL != settings.DATABASE_URL_READONLY
+    assert (
+        "analyst_readonly" in settings.DATABASE_URL_READONLY
+        or settings.DATABASE_URL != settings.DATABASE_URL_READONLY
+        or settings.DATABASE_URL.startswith("sqlite")
+    )

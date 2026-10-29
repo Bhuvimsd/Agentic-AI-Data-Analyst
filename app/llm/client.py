@@ -174,35 +174,65 @@ class MockLLMClient(LLMClient):
                     "referenced_tables": []
                 })
 
-        # 3. Deterministic Question Mapping
-        if "total completed revenue" in q_lower or "total revenue" in q_lower or "gross revenue" in q_lower:
-            return response_model.model_validate({
-                "sql": "SELECT ROUND(SUM(oi.quantity * oi.unit_price), 2) AS total_completed_revenue FROM order_items oi JOIN orders o ON oi.order_id = o.order_id WHERE o.status = 'Completed';",
-                "assumptions": ["Revenue includes only completed orders (status = 'Completed')"],
-                "needs_clarification": False,
-                "clarification_message": None,
-                "is_safe_query": True,
-                "rejection_reason": None,
-                "referenced_tables": ["order_items", "orders"]
-            })
+        # 3. Dynamic Natural Language Parameter & Question Mapping
+        import re
 
-        if "five products" in q_lower or "top 5 products" in q_lower or "most revenue" in q_lower:
-            return response_model.model_validate({
-                "sql": "SELECT p.product_id, p.product_name, p.category, ROUND(SUM(oi.quantity * oi.unit_price), 2) AS total_revenue FROM order_items oi JOIN orders o ON oi.order_id = o.order_id JOIN products p ON oi.product_id = p.product_id WHERE o.status = 'Completed' GROUP BY p.product_id, p.product_name, p.category ORDER BY total_revenue DESC LIMIT 5;",
-                "assumptions": ["Ranked descending by completed order sales revenue and limited to top 5"],
-                "needs_clarification": False,
-                "clarification_message": None,
-                "is_safe_query": True,
-                "rejection_reason": None,
-                "referenced_tables": ["order_items", "orders", "products"]
-            })
+        # Helper: Extract Limit (default 5 for rankings, otherwise 50)
+        limit_val = 5
+        m_lim = re.search(r"(?:top|first|limit)\s*(\d+)", q_lower)
+        if m_lim:
+            limit_val = int(m_lim.group(1))
+        else:
+            word_nums = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
+            for w, n in word_nums.items():
+                if f"top {w}" in q_lower or f"{w} products" in q_lower or f"top {w} " in q_lower:
+                    limit_val = n
+                    break
 
-        if "monthly revenue" in q_lower:
-            year = "2024" if "2024" in q_lower else ("2025" if "2025" in q_lower else None)
-            year_filter = f" AND o.order_date >= '{year}-01-01' AND o.order_date < '{int(year)+1}-01-01'" if year else ""
+        # Helper: Extract Year Range (e.g. "2020 to 2024", "between 2020 and 2024") or Single Year
+        range_match = re.search(r"(?:from\s+|between\s+)?(20\d{2})\s*(?:to|-|through|until|and)\s*(20\d{2})", q_lower)
+        single_year_match = re.findall(r"\b(20\d{2})\b", q_lower)
+
+        if range_match:
+            y1, y2 = range_match.groups()
+            year_filter = f" AND o.order_date >= '{y1}-01-01' AND o.order_date < '{int(y2)+1}-01-01'"
+            year_assumption = f"Filtered for completed orders from {y1} to {y2}"
+        elif single_year_match:
+            y = single_year_match[0]
+            year_filter = f" AND o.order_date >= '{y}-01-01' AND o.order_date < '{int(y)+1}-01-01'"
+            year_assumption = f"Filtered for completed orders in {y}"
+        else:
+            year_filter = ""
+            year_assumption = "Filtered for all completed orders"
+
+        # Helper: Extract Threshold for Orders Count or Revenue
+        m_thresh = re.search(r"(?:more than|above|>|greater than|over|at least)\s*(\d+)", q_lower)
+        if m_thresh:
+            thresh_val = int(m_thresh.group(1))
+        else:
+            thresh_val = 3 if ("three" in q_lower or " 3 " in q_lower) else 1
+
+        # 3.1 Monthly Revenue & Chronological Sales
+        if (
+            "monthly revenue" in q_lower
+            or "monthly sales" in q_lower
+            or "monthly trend" in q_lower
+            or "revenue trend" in q_lower
+            or "sales by month" in q_lower
+            or "revenue by month" in q_lower
+            or ("monthly" in q_lower and "revenue" in q_lower)
+        ):
             return response_model.model_validate({
-                "sql": f"SELECT TO_CHAR(o.order_date, 'YYYY-MM') AS order_month, COUNT(DISTINCT o.order_id) AS total_orders, ROUND(SUM(oi.quantity * oi.unit_price), 2) AS monthly_revenue FROM orders o JOIN order_items oi ON o.order_id = oi.order_id WHERE o.status = 'Completed'{year_filter} GROUP BY TO_CHAR(o.order_date, 'YYYY-MM') ORDER BY order_month ASC;",
-                "assumptions": [f"Filtered for completed orders{' in ' + year if year else ''}", "Grouped chronologically by year-month"],
+                "sql": (
+                    f"SELECT TO_CHAR(o.order_date, 'YYYY-MM') AS order_month, "
+                    f"COUNT(DISTINCT o.order_id) AS total_orders, "
+                    f"ROUND(SUM(oi.quantity * oi.unit_price), 2) AS monthly_revenue "
+                    f"FROM orders o JOIN order_items oi ON o.order_id = oi.order_id "
+                    f"WHERE o.status = 'Completed'{year_filter} "
+                    f"GROUP BY TO_CHAR(o.order_date, 'YYYY-MM') "
+                    f"ORDER BY order_month ASC;"
+                ),
+                "assumptions": [year_assumption, "Grouped chronologically by year-month"],
                 "needs_clarification": False,
                 "clarification_message": None,
                 "is_safe_query": True,
@@ -210,21 +240,22 @@ class MockLLMClient(LLMClient):
                 "referenced_tables": ["orders", "order_items"]
             })
 
-        if "customers" in q_lower and ("more than" in q_lower or "orders" in q_lower):
-            threshold = 3 if "three" in q_lower or " 3 " in q_lower else 1
+        # 3.2 Total Completed Revenue / Gross Revenue
+        if "total completed revenue" in q_lower or "total revenue" in q_lower or "gross revenue" in q_lower or "overall revenue" in q_lower:
             return response_model.model_validate({
-                "sql": f"SELECT c.customer_id, c.customer_name, c.city, COUNT(o.order_id) AS total_orders_placed FROM customers c JOIN orders o ON c.customer_id = o.customer_id GROUP BY c.customer_id, c.customer_name, c.city HAVING COUNT(o.order_id) > {threshold} ORDER BY total_orders_placed DESC;",
-                "assumptions": [f"Filtered for customers having placed strictly more than {threshold} orders"],
+                "sql": f"SELECT ROUND(SUM(oi.quantity * oi.unit_price), 2) AS total_completed_revenue FROM order_items oi JOIN orders o ON oi.order_id = o.order_id WHERE o.status = 'Completed'{year_filter};",
+                "assumptions": [f"Revenue includes only completed orders{f' for {year_assumption.lower()}' if year_filter else ''}"],
                 "needs_clarification": False,
                 "clarification_message": None,
                 "is_safe_query": True,
                 "rejection_reason": None,
-                "referenced_tables": ["customers", "orders"]
+                "referenced_tables": ["order_items", "orders"]
             })
 
-        if "average order value" in q_lower or "aov" in q_lower:
+        # 3.3 Average Order Value (AOV)
+        if "average order value" in q_lower or "aov" in q_lower or "mean order spend" in q_lower:
             return response_model.model_validate({
-                "sql": "WITH order_totals AS (SELECT o.order_id, ROUND(SUM(oi.quantity * oi.unit_price), 2) AS order_total FROM orders o JOIN order_items oi ON o.order_id = oi.order_id WHERE o.status = 'Completed' GROUP BY o.order_id) SELECT COUNT(order_id) AS completed_orders, ROUND(AVG(order_total), 2) AS average_order_value FROM order_totals;",
+                "sql": f"WITH order_totals AS (SELECT o.order_id, ROUND(SUM(oi.quantity * oi.unit_price), 2) AS order_total FROM orders o JOIN order_items oi ON o.order_id = oi.order_id WHERE o.status = 'Completed'{year_filter} GROUP BY o.order_id) SELECT COUNT(order_id) AS completed_orders, ROUND(AVG(order_total), 2) AS average_order_value FROM order_totals;",
                 "assumptions": ["Computed average across completed orders only"],
                 "needs_clarification": False,
                 "clarification_message": None,
@@ -233,13 +264,95 @@ class MockLLMClient(LLMClient):
                 "referenced_tables": ["orders", "order_items"]
             })
 
-        if "region" in q_lower:
-            import re
-            m = re.search(r"(?:above|>|greater than|more than|over)\s*(\d+)", q_lower)
+        # 3.4 Unpurchased / Never Ordered Products
+        if "never ordered" in q_lower or "unpurchased" in q_lower or "never been ordered" in q_lower:
+            return response_model.model_validate({
+                "sql": "SELECT p.product_id, p.product_name, p.category, ROUND(p.price, 2) AS price FROM products p LEFT JOIN order_items oi ON p.product_id = oi.product_id WHERE oi.item_id IS NULL ORDER BY p.price DESC;",
+                "assumptions": ["Identified products present in catalog with zero matching records in order_items"],
+                "needs_clarification": False,
+                "clarification_message": None,
+                "is_safe_query": True,
+                "rejection_reason": None,
+                "referenced_tables": ["products", "order_items"]
+            })
+
+        # 3.5 Most Expensive Products / Catalog Price
+        if ("expensive" in q_lower or "catalog price" in q_lower or "highest price" in q_lower) and "product" in q_lower:
+            return response_model.model_validate({
+                "sql": f"SELECT p.product_id, p.product_name, p.category, ROUND(p.price, 2) AS price FROM products p ORDER BY p.price DESC LIMIT {limit_val};",
+                "assumptions": [f"Ranked catalog products descending by unit price, limited to top {limit_val}"],
+                "needs_clarification": False,
+                "clarification_message": None,
+                "is_safe_query": True,
+                "rejection_reason": None,
+                "referenced_tables": ["products"]
+            })
+
+        # 3.6 Count Products in Catalog
+        if "product" in q_lower and ("count" in q_lower or "how many" in q_lower or "total products exist" in q_lower):
+            return response_model.model_validate({
+                "sql": "SELECT COUNT(product_id) AS total_products FROM products;",
+                "assumptions": ["Counted total registered products in catalog"],
+                "needs_clarification": False,
+                "clarification_message": None,
+                "is_safe_query": True,
+                "rejection_reason": None,
+                "referenced_tables": ["products"]
+            })
+
+        # 3.7 Top Products by Revenue
+        if ("product" in q_lower or "item" in q_lower) and ("revenue" in q_lower or "sales" in q_lower or "top" in q_lower or "most" in q_lower or "rank" in q_lower):
+            return response_model.model_validate({
+                "sql": f"SELECT p.product_id, p.product_name, p.category, ROUND(SUM(oi.quantity * oi.unit_price), 2) AS total_revenue FROM order_items oi JOIN orders o ON oi.order_id = o.order_id JOIN products p ON oi.product_id = p.product_id WHERE o.status = 'Completed' GROUP BY p.product_id, p.product_name, p.category ORDER BY total_revenue DESC LIMIT {limit_val};",
+                "assumptions": [f"Ranked descending by completed order sales revenue and limited to top {limit_val}"],
+                "needs_clarification": False,
+                "clarification_message": None,
+                "is_safe_query": True,
+                "rejection_reason": None,
+                "referenced_tables": ["order_items", "orders", "products"]
+            })
+
+        # 3.8 Store Locations & Regional Analytics
+        if ("stores located in" in q_lower or "stores in" in q_lower) and not ("revenue" in q_lower or "sales" in q_lower):
+            reg = "South" if "south" in q_lower else ("West" if "west" in q_lower else ("North" if "north" in q_lower else ("East" if "east" in q_lower else "Central")))
+            return response_model.model_validate({
+                "sql": f"SELECT store_id, store_name, region FROM stores WHERE region = '{reg}' ORDER BY store_id ASC;",
+                "assumptions": [f"Filtered physical stores in {reg} region"],
+                "needs_clarification": False,
+                "clarification_message": None,
+                "is_safe_query": True,
+                "rejection_reason": None,
+                "referenced_tables": ["stores"]
+            })
+
+        if "store" in q_lower and ("count" in q_lower or "how many" in q_lower or "physical" in q_lower) and not ("revenue" in q_lower or "sales" in q_lower):
+            return response_model.model_validate({
+                "sql": "SELECT COUNT(*) AS total_stores FROM stores;",
+                "assumptions": ["Counted total retail physical store locations"],
+                "needs_clarification": False,
+                "clarification_message": None,
+                "is_safe_query": True,
+                "rejection_reason": None,
+                "referenced_tables": ["stores"]
+            })
+
+        if "store location" in q_lower and "revenue" in q_lower:
+            return response_model.model_validate({
+                "sql": f"SELECT s.store_id, s.store_name, s.region, ROUND(SUM(oi.quantity * oi.unit_price), 2) AS total_revenue FROM stores s JOIN orders o ON s.store_id = o.store_id JOIN order_items oi ON o.order_id = oi.order_id WHERE o.status = 'Completed' GROUP BY s.store_id, s.store_name, s.region ORDER BY total_revenue DESC LIMIT {limit_val};",
+                "assumptions": [f"Top {limit_val} store locations by completed revenue"],
+                "needs_clarification": False,
+                "clarification_message": None,
+                "is_safe_query": True,
+                "rejection_reason": None,
+                "referenced_tables": ["stores", "orders", "order_items"]
+            })
+
+        if "region" in q_lower or "geographic" in q_lower:
+            m_reg = re.search(r"(?:above|>|greater than|more than|over)\s*(\d+)", q_lower)
             having_clause = ""
             assumptions = ["Aggregated by store commercial region for completed orders"]
-            if m:
-                thresh = m.group(1)
+            if m_reg:
+                thresh = m_reg.group(1)
                 if re.search(rf"revenue\s*(?:is\s*)?(?:above|>|greater than|more than|over)\s*{thresh}", q_lower):
                     having_clause = f" HAVING ROUND(SUM(oi.quantity * oi.unit_price), 2) > {thresh}"
                     assumptions.append(f"Filtered for regional_revenue > {thresh}")
@@ -257,18 +370,75 @@ class MockLLMClient(LLMClient):
                 "referenced_tables": ["stores", "orders", "order_items"]
             })
 
-        if "never ordered" in q_lower or "unpurchased" in q_lower:
+        # 3.9 Customer Analysis
+        if "customer" in q_lower or "buyer" in q_lower:
+            if "count" in q_lower or "how many" in q_lower or "total registered" in q_lower:
+                return response_model.model_validate({
+                    "sql": "SELECT COUNT(*) AS total_customers FROM customers;",
+                    "assumptions": ["Counted total registered customers"],
+                    "needs_clarification": False,
+                    "clarification_message": None,
+                    "is_safe_query": True,
+                    "rejection_reason": None,
+                    "referenced_tables": ["customers"]
+                })
+
+            if "spending" in q_lower or "spend" in q_lower:
+                return response_model.model_validate({
+                    "sql": f"SELECT c.customer_id, c.customer_name, c.city, ROUND(SUM(oi.quantity * oi.unit_price), 2) AS total_spent FROM customers c JOIN orders o ON c.customer_id = o.customer_id JOIN order_items oi ON o.order_id = oi.order_id WHERE o.status = 'Completed' GROUP BY c.customer_id, c.customer_name, c.city ORDER BY total_spent DESC LIMIT {limit_val};",
+                    "assumptions": [f"Ranked customers by cumulative spend, limited to top {limit_val}"],
+                    "needs_clarification": False,
+                    "clarification_message": None,
+                    "is_safe_query": True,
+                    "rejection_reason": None,
+                    "referenced_tables": ["customers", "orders", "order_items"]
+                })
+
+            if "mumbai" in q_lower:
+                return response_model.model_validate({
+                    "sql": "SELECT DISTINCT c.customer_id, c.customer_name, c.city FROM customers c JOIN orders o ON c.customer_id = o.customer_id WHERE c.city = 'Mumbai';",
+                    "assumptions": ["Filtered customers residing in Mumbai with placed orders"],
+                    "needs_clarification": False,
+                    "clarification_message": None,
+                    "is_safe_query": True,
+                    "rejection_reason": None,
+                    "referenced_tables": ["customers", "orders"]
+                })
+
             return response_model.model_validate({
-                "sql": "SELECT p.product_id, p.product_name, p.category, ROUND(p.price, 2) AS price FROM products p LEFT JOIN order_items oi ON p.product_id = oi.product_id WHERE oi.item_id IS NULL ORDER BY p.price DESC;",
-                "assumptions": ["Identified products present in catalog with zero matching records in order_items"],
+                "sql": f"SELECT c.customer_id, c.customer_name, c.city, COUNT(o.order_id) AS total_orders_placed FROM customers c JOIN orders o ON c.customer_id = o.customer_id GROUP BY c.customer_id, c.customer_name, c.city HAVING COUNT(o.order_id) > {thresh_val} ORDER BY total_orders_placed DESC;",
+                "assumptions": [f"Filtered for customers having placed strictly more than {thresh_val} orders"],
                 "needs_clarification": False,
                 "clarification_message": None,
                 "is_safe_query": True,
                 "rejection_reason": None,
-                "referenced_tables": ["products", "order_items"]
+                "referenced_tables": ["customers", "orders"]
             })
 
+        # 3.10 Product Category Analytics
         if "category" in q_lower:
+            if "list" in q_lower or "categories available" in q_lower:
+                return response_model.model_validate({
+                    "sql": "SELECT DISTINCT category FROM products ORDER BY category ASC;",
+                    "assumptions": ["Distinct product categories in catalog"],
+                    "needs_clarification": False,
+                    "clarification_message": None,
+                    "is_safe_query": True,
+                    "rejection_reason": None,
+                    "referenced_tables": ["products"]
+                })
+
+            if "units sold" in q_lower or "total units" in q_lower:
+                return response_model.model_validate({
+                    "sql": "SELECT p.category, SUM(oi.quantity) AS total_units_sold FROM products p JOIN order_items oi ON p.product_id = oi.product_id JOIN orders o ON oi.order_id = o.order_id WHERE o.status = 'Completed' GROUP BY p.category ORDER BY total_units_sold DESC;",
+                    "assumptions": ["Summed unit sales volume by product category for completed orders"],
+                    "needs_clarification": False,
+                    "clarification_message": None,
+                    "is_safe_query": True,
+                    "rejection_reason": None,
+                    "referenced_tables": ["products", "order_items", "orders"]
+                })
+
             return response_model.model_validate({
                 "sql": "SELECT p.category, COUNT(DISTINCT p.product_id) AS product_count, SUM(oi.quantity) AS units_sold, ROUND(SUM(oi.quantity * oi.unit_price), 2) AS category_revenue FROM products p JOIN order_items oi ON p.product_id = oi.product_id JOIN orders o ON oi.order_id = o.order_id WHERE o.status = 'Completed' GROUP BY p.category ORDER BY category_revenue DESC;",
                 "assumptions": ["Aggregated sales volume and revenue by product category for completed orders"],
@@ -278,6 +448,86 @@ class MockLLMClient(LLMClient):
                 "rejection_reason": None,
                 "referenced_tables": ["products", "order_items", "orders"]
             })
+
+        # 3.11 Payment Analysis
+        if "payment" in q_lower:
+            if "method" in q_lower or "methods" in q_lower:
+                return response_model.model_validate({
+                    "sql": "SELECT DISTINCT payment_method FROM payments ORDER BY payment_method ASC;",
+                    "assumptions": ["Listed unique customer payment methods"],
+                    "needs_clarification": False,
+                    "clarification_message": None,
+                    "is_safe_query": True,
+                    "rejection_reason": None,
+                    "referenced_tables": ["payments"]
+                })
+            if "upi" in q_lower:
+                return response_model.model_validate({
+                    "sql": "SELECT ROUND(SUM(amount), 2) AS total_upi_revenue FROM payments WHERE payment_method = 'UPI' AND payment_status = 'Completed';",
+                    "assumptions": ["Total completed payments via UPI"],
+                    "needs_clarification": False,
+                    "clarification_message": None,
+                    "is_safe_query": True,
+                    "rejection_reason": None,
+                    "referenced_tables": ["payments"]
+                })
+            return response_model.model_validate({
+                "sql": "SELECT ROUND(AVG(amount), 2) AS average_payment_amount FROM payments WHERE payment_status = 'Completed';",
+                "assumptions": ["Calculated mean payment amount for completed transactions"],
+                "needs_clarification": False,
+                "clarification_message": None,
+                "is_safe_query": True,
+                "rejection_reason": None,
+                "referenced_tables": ["payments"]
+            })
+
+        # 3.12 Order Status & Date Filtering
+        if "order" in q_lower:
+            if "order status" in q_lower or ("status" in q_lower and "count" in q_lower):
+                return response_model.model_validate({
+                    "sql": "SELECT status, COUNT(order_id) AS total_orders FROM orders GROUP BY status ORDER BY total_orders DESC;",
+                    "assumptions": ["Grouped orders by status lifecycle state"],
+                    "needs_clarification": False,
+                    "clarification_message": None,
+                    "is_safe_query": True,
+                    "rejection_reason": None,
+                    "referenced_tables": ["orders"]
+                })
+
+            if "delivered" in q_lower:
+                return response_model.model_validate({
+                    "sql": "SELECT order_id, customer_id, order_date, status FROM orders WHERE status = 'Delivered' ORDER BY order_date DESC LIMIT 50;",
+                    "assumptions": ["Filtered orders with status Delivered"],
+                    "needs_clarification": False,
+                    "clarification_message": None,
+                    "is_safe_query": True,
+                    "rejection_reason": None,
+                    "referenced_tables": ["orders"]
+                })
+
+            date_match = re.search(r"(\d{4}-\d{2}-\d{2})", q_lower)
+            if date_match:
+                d_str = date_match.group(1)
+                return response_model.model_validate({
+                    "sql": f"SELECT order_id, customer_id, order_date, status FROM orders WHERE order_date >= '{d_str}' ORDER BY order_date ASC LIMIT 100;",
+                    "assumptions": [f"Filtered orders on or after {d_str}"],
+                    "needs_clarification": False,
+                    "clarification_message": None,
+                    "is_safe_query": True,
+                    "rejection_reason": None,
+                    "referenced_tables": ["orders"]
+                })
+
+            if "more than 2 items" in q_lower or "containing more than" in q_lower:
+                return response_model.model_validate({
+                    "sql": "SELECT order_id, COUNT(item_id) AS item_count FROM order_items GROUP BY order_id HAVING COUNT(item_id) > 2 ORDER BY item_count DESC LIMIT 50;",
+                    "assumptions": ["Filtered orders having strictly more than 2 distinct line items"],
+                    "needs_clarification": False,
+                    "clarification_message": None,
+                    "is_safe_query": True,
+                    "rejection_reason": None,
+                    "referenced_tables": ["order_items"]
+                })
 
         # Generic safe fallback for standard queries
         return response_model.model_validate({
