@@ -234,9 +234,22 @@ class MockLLMClient(LLMClient):
             })
 
         if "region" in q_lower:
+            import re
+            m = re.search(r"(?:above|>|greater than|more than|over)\s*(\d+)", q_lower)
+            having_clause = ""
+            assumptions = ["Aggregated by store commercial region for completed orders"]
+            if m:
+                thresh = m.group(1)
+                if re.search(rf"revenue\s*(?:is\s*)?(?:above|>|greater than|more than|over)\s*{thresh}", q_lower):
+                    having_clause = f" HAVING ROUND(SUM(oi.quantity * oi.unit_price), 2) > {thresh}"
+                    assumptions.append(f"Filtered for regional_revenue > {thresh}")
+                else:
+                    having_clause = f" HAVING COUNT(DISTINCT o.order_id) > {thresh}"
+                    assumptions.append(f"Filtered for total_orders > {thresh}")
+
             return response_model.model_validate({
-                "sql": "SELECT s.region, COUNT(DISTINCT o.order_id) AS total_orders, ROUND(SUM(oi.quantity * oi.unit_price), 2) AS regional_revenue FROM stores s JOIN orders o ON s.store_id = o.store_id JOIN order_items oi ON o.order_id = oi.order_id WHERE o.status = 'Completed' GROUP BY s.region ORDER BY regional_revenue DESC;",
-                "assumptions": ["Aggregated by store commercial region for completed orders"],
+                "sql": f"SELECT s.region, COUNT(DISTINCT o.order_id) AS total_orders, ROUND(SUM(oi.quantity * oi.unit_price), 2) AS regional_revenue FROM stores s JOIN orders o ON s.store_id = o.store_id JOIN order_items oi ON o.order_id = oi.order_id WHERE o.status = 'Completed' GROUP BY s.region{having_clause} ORDER BY regional_revenue DESC;",
+                "assumptions": assumptions,
                 "needs_clarification": False,
                 "clarification_message": None,
                 "is_safe_query": True,
