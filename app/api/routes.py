@@ -14,9 +14,11 @@ from app.config import settings
 from app.database import get_readonly_connection, check_database_health
 from app.api.schemas import (
     HealthResponse, SchemaResponse, AnalyticsQueryRequest, 
-    AnalyticsQueryResponse, SafeErrorResponse
+    AnalyticsQueryResponse, SafeErrorResponse,
+    AgentQueryRequest, AgentQueryResponse
 )
 from app.services.analytics_service import execute_predefined_query, get_database_schema
+from app.agent.workflow import run_agentic_workflow
 
 router = APIRouter(tags=["Analytics Gateway"])
 
@@ -114,3 +116,59 @@ def run_analytics_query(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="A database error occurred while processing the analytical query."
         )
+
+
+# ------------------------------------------------------------------------------
+# 4. Agentic AI Natural Language Query Endpoint
+# ------------------------------------------------------------------------------
+@router.post(
+    "/analytics/agent/query",
+    response_model=AgentQueryResponse,
+    responses={
+        400: {"model": SafeErrorResponse, "description": "Invalid input"},
+        500: {"model": SafeErrorResponse, "description": "Workflow execution error"}
+    },
+    summary="Agentic AI Natural Language Query",
+    description="Processes a natural-language business question through the stateful LangGraph agentic workflow with AST security guarantees."
+)
+def run_agent_query(
+    request: AgentQueryRequest
+):
+    """
+    Executes the end-to-end LangGraph agent workflow:
+    1. Interprets question
+    2. Retrieves approved schema
+    3. Generates PostgreSQL SELECT query
+    4. Validates SQL AST with SQLGuard
+    5. Executes approved query with read-only credentials
+    6. Analyzes results and generates grounded explanation
+    """
+    try:
+        final_state = run_agentic_workflow(
+            question=request.question
+        )
+        now_iso = datetime.now(timezone.utc).isoformat()
+        
+        rows = final_state.get("query_execution_result") or []
+        cols = final_state.get("columns") or (list(rows[0].keys()) if rows else [])
+        
+        return AgentQueryResponse(
+            question=request.question,
+            status=final_state.get("workflow_status", "failed"),
+            generated_sql=final_state.get("generated_sql"),
+            columns=cols,
+            data=rows,
+            row_count=final_state.get("row_count", len(rows)),
+            execution_time_ms=final_state.get("execution_time_ms", 0.0),
+            business_insight=final_state.get("business_insight"),
+            clarification_message=final_state.get("clarification_message"),
+            error_details=final_state.get("error_details"),
+            retry_count=final_state.get("retry_count", 0),
+            timestamp=now_iso
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Agent workflow error: {str(e)}"
+        )
+

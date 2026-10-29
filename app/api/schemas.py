@@ -158,3 +158,39 @@ class SafeErrorResponse(BaseModel):
     error: str
     details: Optional[Any] = None
     timestamp: str
+
+
+# ------------------------------------------------------------------------------
+# 4. Agentic AI Natural Language Query Schemas
+# ------------------------------------------------------------------------------
+class AgentQueryRequest(BaseModel):
+    """Natural-language question payload for the LangGraph agent."""
+    question: str = Field(
+        ..., 
+        min_length=2, 
+        max_length=1000, 
+        description="Natural-language business question"
+    )
+
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "question": "What is our total completed revenue and top 5 selling products?"
+        }
+    })
+
+
+class AgentQueryResponse(BaseModel):
+    """End-to-end analytical response from the Agentic AI Data Analyst."""
+    question: str
+    status: str = Field(..., description="'completed', 'needs_clarification', 'rejected', or 'failed'")
+    generated_sql: Optional[str] = None
+    columns: List[str] = Field(default_factory=list)
+    data: List[Dict[str, Any]] = Field(default_factory=list)
+    row_count: int = 0
+    execution_time_ms: float = 0.0
+    business_insight: Optional[str] = None
+    clarification_message: Optional[str] = None
+    error_details: Optional[str] = None
+    retry_count: int = 0
+    timestamp: str
+
