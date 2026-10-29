@@ -39,6 +39,36 @@ class Settings(BaseSettings):
         description="Restricted read-only connection string for analytical queries"
     )
 
+    # LLM Provider Configuration (OpenAI-compatible)
+    LLM_PROVIDER: str = Field(
+        default="openai",
+        description="LLM Provider: 'openai', 'groq', 'ollama', or 'mock'"
+    )
+    LLM_API_KEY: Optional[str] = Field(
+        default="mock-api-key",
+        description="API key for OpenAI-compatible LLM endpoint"
+    )
+    LLM_BASE_URL: Optional[str] = Field(
+        default="https://api.openai.com/v1",
+        description="Base URL for OpenAI-compatible LLM API"
+    )
+    LLM_MODEL: str = Field(
+        default="gpt-4o-mini",
+        description="LLM model name (e.g. gpt-4o-mini, llama-3.3-70b-versatile, mistral)"
+    )
+    LLM_TEMPERATURE: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Temperature for deterministic SQL generation (default 0.0)"
+    )
+    LLM_MAX_TOKENS: int = Field(
+        default=1000,
+        ge=100,
+        le=4000,
+        description="Max tokens generated per prompt"
+    )
+
     # Execution & Safety Controls
     QUERY_TIMEOUT_SECONDS: int = Field(
         default=10, 
