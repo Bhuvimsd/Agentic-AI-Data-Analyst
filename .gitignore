@@ -52,4 +52,5 @@ data/*.csv
 data/*.json
 data/seed.sql
 *.db
+!agentic_ai_analytics.db
 !data/README.md

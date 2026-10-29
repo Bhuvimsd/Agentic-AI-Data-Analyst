@@ -57,8 +57,12 @@ class DashboardAPIClient:
             pass
 
         # Fallback to direct database schema inspector
-        with app_db.readonly_engine.connect() as conn:
-            return get_database_schema(conn).model_dump()
+        try:
+            with app_db.readonly_engine.connect() as conn:
+                return get_database_schema(conn).model_dump()
+        except Exception as e:
+            logger.warning(f"Failed to fetch schema directly from database: {e}")
+            return {"tables": []}
 
     def query_predefined(self, query_id: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Executes a pre-approved analytical query."""

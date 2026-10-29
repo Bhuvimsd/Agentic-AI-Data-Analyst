@@ -56,7 +56,6 @@ def create_db_engine(url: str, is_readonly: bool = True) -> Engine:
                     seed_data(engine, generate_synthetic_dataset(num_customers=500, num_orders=2200, seed=42))
             except Exception as e:
                 logger.warning(f"SQLite auto-initialization check skipped: {e}")
-    else:
         # PostgreSQL with psycopg3 driver
         engine = create_engine(
             url,
@@ -68,7 +67,20 @@ def create_db_engine(url: str, is_readonly: bool = True) -> Engine:
             pool_pre_ping=True,  # Verifies connection liveness before checkout
             echo=False
         )
-    
+
+        # Liveness check: If configured database is unreachable (e.g. on Streamlit Cloud),
+        # automatically fall back to the embedded analytical SQLite database
+        try:
+            with engine.connect() as test_conn:
+                test_conn.execute(text("SELECT 1"))
+        except Exception as e:
+            logger.warning(
+                f"Configured database at '{url.split('@')[-1] if '@' in url else url}' "
+                f"is unreachable ({e}). Automatically falling back to local SQLite analytics database."
+            )
+            fallback_sqlite_path = (BASE_DIR / "agentic_ai_analytics.db").resolve()
+            return create_db_engine(f"sqlite:///{fallback_sqlite_path.as_posix()}", is_readonly=is_readonly)
+
     logger.info(
         f"Initialized {'Read-Only' if is_readonly else 'Admin'} DB engine for: "
         f"{url.split('@')[-1] if '@' in url else url}"
