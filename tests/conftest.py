@@ -31,6 +31,15 @@ def test_engine():
     """
     engine = create_engine(TEST_DB_URL, echo=False)
     
+    # Register to_char function on SQLite connection for PostgreSQL query compatibility
+    from sqlalchemy import event
+    @event.listens_for(engine, "connect")
+    def register_sqlite_functions(dbapi_conn, connection_record):
+        try:
+            dbapi_conn.create_function("to_char", 2, lambda d, fmt: str(d)[:7] if d else None)
+        except Exception:
+            pass
+
     # Initialize schema and seed data
     init_schema(engine)
     dataset = generate_synthetic_dataset(num_customers=500, num_orders=2200, seed=42)

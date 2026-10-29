@@ -59,10 +59,12 @@ admin_engine: Engine = create_db_engine(settings.DATABASE_URL, is_readonly=False
 readonly_engine: Engine = create_db_engine(settings.DATABASE_URL_READONLY, is_readonly=True)
 
 
-def set_statement_timeout(conn: Connection, timeout_seconds: Optional[int] = None) -> None:
+def configure_readonly_session(conn: Connection, timeout_seconds: Optional[int] = None) -> None:
     """
-    Sets a local statement timeout on the connection to prevent runaway queries.
-    PostgreSQL: Executes 'SET LOCAL statement_timeout = ...'
+    Enforces multi-layer runtime constraints on read-only database connections:
+    1. Statement timeout (default 10s) to prevent runaway queries / DoS.
+    2. Enforces transaction read-only mode (SET LOCAL default_transaction_read_only = on).
+    3. Restricts schema search path (SET LOCAL search_path = public).
     """
     timeout = timeout_seconds or settings.QUERY_TIMEOUT_SECONDS
     timeout_ms = int(timeout * 1000)
@@ -70,8 +72,15 @@ def set_statement_timeout(conn: Connection, timeout_seconds: Optional[int] = Non
     if "postgresql" in conn.dialect.name.lower():
         try:
             conn.execute(text(f"SET LOCAL statement_timeout = {timeout_ms}"))
+            conn.execute(text("SET LOCAL default_transaction_read_only = on"))
+            conn.execute(text("SET LOCAL search_path = public"))
         except Exception as e:
-            logger.warning(f"Could not set statement_timeout on PostgreSQL connection: {e}")
+            logger.warning(f"Could not configure PostgreSQL session controls: {e}")
+
+
+def set_statement_timeout(conn: Connection, timeout_seconds: Optional[int] = None) -> None:
+    """Backward-compatible wrapper for setting statement timeout."""
+    configure_readonly_session(conn, timeout_seconds)
 
 
 # ------------------------------------------------------------------------------
@@ -85,8 +94,8 @@ def get_readonly_connection() -> Generator[Connection, None, None]:
     conn: Optional[Connection] = None
     try:
         conn = readonly_engine.connect()
-        # Enforce statement timeout on checkout
-        set_statement_timeout(conn, settings.QUERY_TIMEOUT_SECONDS)
+        # Enforce statement timeout and read-only session controls on checkout
+        configure_readonly_session(conn, settings.QUERY_TIMEOUT_SECONDS)
         yield conn
     finally:
         if conn is not None and not conn.closed:

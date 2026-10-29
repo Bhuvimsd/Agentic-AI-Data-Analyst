@@ -87,6 +87,12 @@ class Settings(BaseSettings):
         description="Maximum incoming HTTP request body size in bytes"
     )
 
+    # Security & API Protection
+    API_AUTH_ENABLED: bool = Field(default=False, description="Enable API key authentication")
+    API_KEY: Optional[str] = Field(default=None, description="Secret API key required for incoming requests")
+    RATE_LIMIT_ENABLED: bool = Field(default=False, description="Enable client IP rate limiting")
+    RATE_LIMIT_PER_MINUTE: int = Field(default=60, description="Max requests permitted per minute per IP")
+
     # Connection Pooling Parameters
     DB_POOL_SIZE: int = Field(default=10, description="SQLAlchemy connection pool size")
     DB_MAX_OVERFLOW: int = Field(default=20, description="SQLAlchemy connection pool max overflow")

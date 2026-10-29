@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from app.config import settings
 from app.database import readonly_engine, admin_engine, check_database_health
+from app.security.middleware import RateLimitMiddleware, APIKeyAuthMiddleware
 from app.api.routes import router as api_router
 
 # Configure root logging
@@ -63,7 +64,7 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
             try:
                 length = int(content_length)
                 if length > settings.MAX_REQUEST_BODY_BYTES:
-                    status_code = getattr(status, "HTTP_413_CONTENT_TOO_LARGE", status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+                    status_code = status.HTTP_413_CONTENT_TOO_LARGE
                     return JSONResponse(
                         status_code=status_code,
                         content={
@@ -105,7 +106,9 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Request size limiter middleware
+    # Security Middlewares
+    app.add_middleware(RateLimitMiddleware)
+    app.add_middleware(APIKeyAuthMiddleware)
     app.add_middleware(RequestSizeLimitMiddleware)
 
     # Mount API routers

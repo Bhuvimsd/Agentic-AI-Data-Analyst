@@ -136,8 +136,9 @@ class MockLLMClient(LLMClient):
 
         # 1. Adversarial & Prompt Injection Defense
         injection_triggers = [
-            "ignore previous", "disregard", "drop table", "truncate", "delete from",
-            "insert into", "update ", "alter table", "create table", "grant ", "revoke"
+            "ignore previous", "disregard", "drop table", "truncate", "delete from", "delete ",
+            "insert into", "update ", "alter table", "create table", "grant ", "revoke",
+            "pg_sleep", "pg_catalog", "information_schema"
         ]
         if any(trig in q_lower for trig in injection_triggers):
             return response_model.model_validate({
@@ -146,18 +147,20 @@ class MockLLMClient(LLMClient):
                 "needs_clarification": False,
                 "clarification_message": None,
                 "is_safe_query": False,
-                "rejection_reason": "Data modification statements (DROP, TRUNCATE, DELETE, UPDATE, ALTER) are strictly prohibited.",
+                "rejection_reason": "Adversarial operations, data mutations, and unauthorized catalog access are strictly prohibited.",
                 "referenced_tables": []
             })
 
         # 2. Ambiguity & Missing Schema Detection (Hallucination Defense)
         missing_entities = [
             "profit", "margin", "cost", "discount", "discount_amount", 
-            "churn", "salary", "employee", "review", "email", "phone"
+            "churn", "salary", "employee", "review", "email", "phone",
+            "supplier", "warehouse", "inventory", "stock", "carrier", "tracking",
+            "bin", "roi", "campaign", "ltv", "lifetime value", "commission", "bonus", "cac"
         ]
         for term in missing_entities:
-            # Check if term is an isolated word
-            if f" {term} " in f" {q_lower} " or q_lower.startswith(f"{term} ") or q_lower.endswith(f" {term}") or f"{term}?" in q_lower:
+            # Check if term is an isolated word or part of phrase
+            if f" {term} " in f" {q_lower} " or q_lower.startswith(f"{term} ") or q_lower.endswith(f" {term}") or f"{term}?" in q_lower or f"({term})" in q_lower:
                 return response_model.model_validate({
                     "sql": None,
                     "assumptions": [],
