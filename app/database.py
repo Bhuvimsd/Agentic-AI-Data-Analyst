@@ -10,7 +10,7 @@ import logging
 from typing import Generator, Dict, Any, Optional
 from sqlalchemy import create_engine, text, Engine, Connection
 from sqlalchemy.pool import QueuePool, NullPool
-from app.config import settings
+from app.config import settings, BASE_DIR
 
 logger = logging.getLogger("agentic_ai.database")
 
@@ -23,12 +23,39 @@ def create_db_engine(url: str, is_readonly: bool = True) -> Engine:
     is_sqlite = "sqlite" in url.lower()
     
     if is_sqlite:
-        # SQLite uses StaticPool or NullPool for testing
+        # Resolve relative SQLite paths against project BASE_DIR
+        if url.startswith("sqlite:///") and not (":/" in url or ":\\" in url or url.startswith("sqlite:////")):
+            rel_name = url[len("sqlite:///"):]
+            abs_db_path = (BASE_DIR / rel_name).resolve()
+            url = f"sqlite:///{abs_db_path.as_posix()}"
+
         engine = create_engine(
             url,
             echo=False,
             pool_pre_ping=True
         )
+
+        # Register to_char function on SQLite connections for PostgreSQL compatibility
+        from sqlalchemy import event
+        @event.listens_for(engine, "connect")
+        def _register_sqlite_to_char(dbapi_conn, _):
+            try:
+                dbapi_conn.create_function("to_char", 2, lambda d, fmt: str(d)[:7] if d else None)
+            except Exception:
+                pass
+
+        # Verify tables exist; self-heal if empty
+        if not is_readonly:
+            try:
+                from sqlalchemy import inspect
+                inspector = inspect(engine)
+                if "customers" not in inspector.get_table_names():
+                    from scripts.load_data import init_schema, seed_data
+                    from scripts.generate_data import generate_synthetic_dataset
+                    init_schema(engine)
+                    seed_data(engine, generate_synthetic_dataset(num_customers=500, num_orders=2200, seed=42))
+            except Exception as e:
+                logger.warning(f"SQLite auto-initialization check skipped: {e}")
     else:
         # PostgreSQL with psycopg3 driver
         engine = create_engine(

@@ -20,7 +20,7 @@ import app.database as app_db
 from scripts.load_data import init_schema, seed_data
 from scripts.generate_data import generate_synthetic_dataset
 
-TEST_DB_FILE = PROJECT_ROOT / "test_api_analytics.db"
+TEST_DB_FILE = PROJECT_ROOT / "test_temp_conftest.db"
 TEST_DB_URL = f"sqlite:///{TEST_DB_FILE}"
 
 
