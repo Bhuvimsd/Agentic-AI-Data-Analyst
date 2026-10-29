@@ -61,17 +61,19 @@ ALLOWED_FUNC_CLASSES: Tuple[type, ...] = (
     exp.And, exp.Or, exp.LogicalAnd, exp.LogicalOr
 )
 
-# Explicitly permitted named analytical functions (for exp.Anonymous or PostgreSQL specific funcs)
+# Explicitly permitted named analytical functions (for exp.Anonymous or PostgreSQL/Snowflake specific funcs)
 ALLOWED_ANONYMOUS_FUNCTIONS: Set[str] = {
-    "sum", "avg", "count", "min", "max", "round", "coalesce", "to_char",
+    "sum", "avg", "count", "min", "max", "round", "coalesce", "to_char", "to_varchar",
     "substr", "substring", "date_trunc", "extract", "row_number", "rank",
     "dense_rank", "abs", "lower", "upper", "trim", "concat", "cast",
-    "length", "nullif", "greatest", "least", "ceil", "floor", "power", "sqrt"
+    "length", "nullif", "greatest", "least", "ceil", "floor", "power", "sqrt",
+    "iff", "nvl", "zeroifnull", "dateadd", "datediff"
 }
 
-# Forbidden system schemas and catalogs
+# Forbidden system schemas and catalogs (PostgreSQL, Snowflake, MySQL)
 FORBIDDEN_SCHEMAS: Set[str] = {
-    "pg_catalog", "information_schema", "pg_toast", "pg_temp", "pg_internal"
+    "pg_catalog", "information_schema", "pg_toast", "pg_temp", "pg_internal",
+    "snowflake", "account_usage"
 }
 
 # Forbidden DDL/DML mutations
@@ -113,13 +115,22 @@ class SQLGuard:
                 violation_category="EMPTY_QUERY"
             )
 
-        # 1. Parse using PostgreSQL dialect
-        try:
-            parsed_statements = sqlglot.parse(sql_query, read="postgres")
-        except Exception as e:
+        # 1. Parse using PostgreSQL or Snowflake dialect
+        parsed_statements = None
+        parse_err = None
+        for dialect in ("postgres", "snowflake"):
+            try:
+                stmts = sqlglot.parse(sql_query, read=dialect)
+                if stmts and any(s is not None for s in stmts):
+                    parsed_statements = stmts
+                    break
+            except Exception as e:
+                parse_err = e
+
+        if parsed_statements is None:
             return SecurityValidationResult(
                 is_valid=False,
-                error=f"SQL syntax error in PostgreSQL dialect: {str(e)}",
+                error=f"SQL syntax error in SQL dialect: {str(parse_err)}",
                 violation_category="SYNTAX_ERROR"
             )
 

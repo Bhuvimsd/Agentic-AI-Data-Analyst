@@ -108,13 +108,19 @@ def configure_readonly_session(conn: Connection, timeout_seconds: Optional[int] 
     timeout = timeout_seconds or settings.QUERY_TIMEOUT_SECONDS
     timeout_ms = int(timeout * 1000)
     
-    if "postgresql" in conn.dialect.name.lower():
+    dialect_name = conn.dialect.name.lower()
+    if "postgresql" in dialect_name:
         try:
             conn.execute(text(f"SET LOCAL statement_timeout = {timeout_ms}"))
             conn.execute(text("SET LOCAL default_transaction_read_only = on"))
             conn.execute(text("SET LOCAL search_path = public"))
         except Exception as e:
             logger.warning(f"Could not configure PostgreSQL session controls: {e}")
+    elif "snowflake" in dialect_name:
+        try:
+            conn.execute(text(f"ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = {timeout}"))
+        except Exception as e:
+            logger.warning(f"Could not configure Snowflake session controls: {e}")
 
 
 def set_statement_timeout(conn: Connection, timeout_seconds: Optional[int] = None) -> None:
